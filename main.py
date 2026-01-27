@@ -9,7 +9,7 @@ import sqlite3
 import logging
 from pathlib import Path
 
-# --- Constants ---
+#API
 LOGIN_URL = "https://msapi.top-academy.ru/api/v2/auth/login"
 SCHEDULE_API_URL = "https://msapi.top-academy.ru/api/v2/schedule/operations/get-by-date-range"
 LEADER_STREAM_URL = "https://msapi.top-academy.ru/api/v2/dashboard/progress/leader-stream"
@@ -24,7 +24,7 @@ HEADERS = {
     "Origin": "https://journal.top-academy.ru"
 }
 
-# --- Database setup (moved from db.py) ---
+#Database
 current_file_path = Path(__file__).resolve()
 database_folder = current_file_path.parent
 DATABASE_FILE = 'user_credentials.db'
@@ -33,7 +33,7 @@ DATABASE_PATH = database_folder / DATABASE_FILE
 logging.basicConfig(level=logging.INFO)
 
 def init_db():
-    """Инициализирует базу данных и создает таблицу 'accounts', если она не существует."""
+    """Инициализирует базу данных и создает таблицу 'accounts', если она не существует"""
     try:
         conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
@@ -48,14 +48,14 @@ def init_db():
         """)
         conn.commit()
         conn.close()
-        logging.info("[DB] База данных %s инициализирована.", DATABASE_PATH)
+        logging.info("[DB] База данных %s инициализирована", DATABASE_PATH)
     except sqlite3.Error as e:
         logging.error("[DB] Ошибка при инициализации базы данных: %s", e)
 
 def add_account(user_id, username, token):
     """
-    Добавляет новый аккаунт в базу данных. Сохраняет токен вместо пароля.
-    Деактивирует все остальные аккаунты для этого пользователя.
+    Добавляет новый аккаунт в базу данных. Сохраняет токен вместо пароля
+    Деактивирует все остальные аккаунты для этого пользователя
     """
     try:
         conn = sqlite3.connect(DATABASE_PATH)
@@ -75,7 +75,7 @@ def add_account(user_id, username, token):
 
 def get_active_account(user_id):
     """
-    Получает активный аккаунт и его токен для указанного пользователя.
+    Получает активный аккаунт и его токен для указанного пользователя
     """
     try:
         conn = sqlite3.connect(DATABASE_PATH)
@@ -85,7 +85,7 @@ def get_active_account(user_id):
         credentials = cursor.fetchone()
         conn.close()
         if credentials:
-            logging.info("[DB] Активный аккаунт для пользователя %d получен из БД.", user_id)
+            logging.info("[DB] Активный аккаунт для пользователя %d получен из БД", user_id)
         return credentials
     except sqlite3.Error as e:
         logging.error("[DB] Ошибка при получении активного аккаунта для пользователя %d: %s", user_id, e)
@@ -93,7 +93,7 @@ def get_active_account(user_id):
 
 def get_all_accounts(user_id):
     """
-    Получает все аккаунты для указанного пользователя.
+    Получает все аккаунты для указанного пользователя
     """
     try:
         conn = sqlite3.connect(DATABASE_PATH)
@@ -101,7 +101,7 @@ def get_all_accounts(user_id):
         cursor.execute("SELECT username, is_active FROM accounts WHERE user_id = ?", (user_id,))
         accounts = cursor.fetchall()
         conn.close()
-        logging.info("[DB] Список аккаунтов для пользователя %d получен.", user_id)
+        logging.info("[DB] Список аккаунтов для пользователя %d получен", user_id)
         return accounts
     except sqlite3.Error as e:
         logging.error("[DB] Ошибка при получении всех аккаунтов для пользователя %d: %s", user_id, e)
@@ -109,7 +109,7 @@ def get_all_accounts(user_id):
 
 def set_active_account(user_id, username):
     """
-    Устанавливает указанный аккаунт как активный для пользователя.
+    Устанавливает указанный аккаунт как активный для пользователя
     """
     try:
         conn = sqlite3.connect(DATABASE_PATH)
@@ -118,13 +118,13 @@ def set_active_account(user_id, username):
         cursor.execute("UPDATE accounts SET is_active = 1 WHERE user_id = ? AND username = ?", (user_id, username))
         conn.commit()
         conn.close()
-        logging.info("[DB] Активным аккаунтом для пользователя %d установлен %s.", user_id, username)
+        logging.info("[DB] Активным аккаунтом для пользователя %d установлен %s", user_id, username)
     except sqlite3.Error as e:
         logging.error("[DB] Ошибка при смене активного аккаунта для пользователя %d: %s", user_id, e)
 
 def delete_account(user_id, username):
     """
-    Удаляет аккаунт из базы данных.
+    Удаляет аккаунт из базы данных
     """
     try:
         conn = sqlite3.connect(DATABASE_PATH)
@@ -132,13 +132,13 @@ def delete_account(user_id, username):
         cursor.execute("DELETE FROM accounts WHERE user_id = ? AND username = ?", (user_id, username))
         conn.commit()
         conn.close()
-        logging.info("[DB] Аккаунт %s для пользователя %d удален.", username, user_id)
+        logging.info("[DB] Аккаунт %s для пользователя %d удален", username, user_id)
     except sqlite3.Error as e:
         logging.error("[DB] Ошибка при удалении аккаунта %s для пользователя %d: %s", username, user_id, e)
 
 def has_accounts(user_id):
     """
-    Проверяет, есть ли у пользователя какие-либо аккаунты.
+    Проверяет, есть ли у пользователя какие-либо аккаунты
     """
     try:
         conn = sqlite3.connect(DATABASE_PATH)
@@ -153,7 +153,7 @@ def has_accounts(user_id):
 
 def delete_all_accounts(user_id: int):
     """
-    Удаляет все аккаунты для указанного пользователя.
+    Удаляет все аккаунты для указанного пользователя
     """
     try:
         conn = sqlite3.connect(DATABASE_PATH)
@@ -161,19 +161,19 @@ def delete_all_accounts(user_id: int):
         cursor.execute("DELETE FROM accounts WHERE user_id = ?", (user_id,))
         conn.commit()
         conn.close()
-        logging.info("[DB] Все аккаунты для пользователя %d удалены.", user_id)
+        logging.info("[DB] Все аккаунты для пользователя %d удалены", user_id)
     except sqlite3.Error as e:
         logging.error("[DB] Ошибка при удалении всех аккаунтов для пользователя %d: %s", user_id, e)
 
 # --- Utility Functions ---
 
 def escape_for_markdown_v2(text: str) -> str:
-    """Экранирует специальные символы Markdown V2."""
+    """Экранирует специальные символы Markdown V2"""
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
 def get_current_week_range():
-    """Возвращает диапазон дат для текущей недели."""
+    """Возвращает диапазон дат для текущей недели"""
     today = datetime.today()
     start_of_week = today - timedelta(days=today.weekday())
     end_of_week = start_of_week + timedelta(days=6)
@@ -183,8 +183,8 @@ def get_current_week_range():
 
 async def get_auth_token(username, password):
     """
-    Получает токен авторизации, используя имя пользователя и пароль.
-    Возвращает токен, если успешно, иначе вызывает исключение.
+    Получает токен авторизации, используя имя пользователя и пароль
+    Возвращает токен, если успешно, иначе вызывает исключение
     """
     try:
         async with httpx.AsyncClient(follow_redirects=True) as client:
@@ -204,7 +204,7 @@ async def get_auth_token(username, password):
             login_json = login_resp.json()
             token = login_json.get("access_token") or login_json.get("token")
             if not token:
-                raise Exception("Не удалось получить токен авторизации.")
+                raise Exception("Не удалось получить токен авторизации")
             return token
     except httpx.HTTPStatusError as e:
         if e.response.status_code == 401:
@@ -215,7 +215,7 @@ async def get_auth_token(username, password):
         raise Exception(f"Ошибка получения токена: {e}")
 
 async def schedule_get(start_date, end_date, token):
-    """Получает расписание по токену."""
+    """Получает расписание по токену"""
     try:
         auth_headers = HEADERS.copy()
         auth_headers["Authorization"] = f"Bearer {token}"
@@ -240,7 +240,7 @@ async def schedule_get(start_date, end_date, token):
         raise
 
 async def get_leader_stream(token):
-    """Получает топ-3 студентов потока по токену."""
+    """Получает топ-3 студентов потока по токену"""
     try:
         auth_headers = HEADERS.copy()
         auth_headers["Authorization"] = f"Bearer {token}"
@@ -258,7 +258,7 @@ async def get_leader_stream(token):
         raise Exception(f"Непредвиденная ошибка при получении лидеров потока: {e}")
 
 async def get_leader_group(token):
-    """Получает список студентов группы по токену."""
+    """Получает список студентов группы по токену"""
     try:
         auth_headers = HEADERS.copy()
         auth_headers["Authorization"] = f"Bearer {token}"
@@ -276,7 +276,7 @@ async def get_leader_group(token):
         raise Exception(f"Непредвиденная ошибка при получении студентов группы: {e}")
 
 async def get_future_exams(token):
-    """Получает список будущих экзаменов по токену."""
+    """Получает список будущих экзаменов по токену"""
     try:
         auth_headers = HEADERS.copy()
         auth_headers["Authorization"] = f"Bearer {token}"
@@ -300,13 +300,13 @@ def save_json_to_file(json_data: dict, file_path: str):
     try:
         with open(file_path, 'w', encoding='utf-8') as f:
             json.dump(json_data, f, ensure_ascii=False, indent=4)
-        print(f"[✅] Файл {file_path} успешно создан.")
+        print(f"Файл {file_path} успешно создан.")
     except Exception as e:
-        print(f"[❌] Ошибка при сохранении JSON в файл: {e}")
+        print(f"Ошибка при сохранении JSON в файл: {e}")
         raise
 
 def convert_schedule_to_markdown(schedule: list) -> str:
-    """Конвертирует данные расписания в Markdown-формат."""
+    """Конвертирует данные расписания в Markdown-формат"""
     try:
         today = datetime.today().date()
         start_of_week = today - timedelta(days=today.weekday())
@@ -362,7 +362,7 @@ def convert_schedule_to_markdown(schedule: list) -> str:
         return markdown_text
 
     except Exception as e:
-        print(f"[❌] Ошибка при создании Markdown: {e}")
+        print(f"Ошибка при создании Markdown: {e}")
         raise
 
 def get_student_name(student_data: dict) -> str:
@@ -373,9 +373,9 @@ def get_student_name(student_data: dict) -> str:
     return "Неизвестный"
 
 def convert_leader_stream_to_markdown(json_data: list) -> str:
-    """Конвертирует данные лидеров потока в Markdown-формат."""
+    """Конвертирует данные лидеров потока в Markdown-формат"""
     if not json_data:
-        return "❌ Список лидеров потока пуст\\."
+        return "Список лидеров потока пуст\\"
 
     top_3 = json_data[:3]
     md_lines = ["🏆 Топ\\-3 в потоке🏆\n"]
@@ -387,9 +387,9 @@ def convert_leader_stream_to_markdown(json_data: list) -> str:
     return "\n".join(md_lines)
 
 def create_leader_group_markdown(json_data: list) -> str:
-    """Конвертирует данные студентов группы в Markdown-формат."""
+    """Конвертирует данные студентов группы в Markdown-формат"""
     if not json_data:
-        return "❌ Список студентов группы пуст\\."
+        return "Список студентов группы пуст\\"
 
     md_lines = ["👥 Студенты вашей группы 👥\n"]
     sorted_students = sorted(json_data, key=lambda x: x.get('amount', 0), reverse=True)
@@ -402,24 +402,20 @@ def create_leader_group_markdown(json_data: list) -> str:
     return "\n".join(md_lines)
 
 def convert_exams_to_markdown(json_data: list) -> str:
-    """Конвертирует данные экзаменов в Markdown-формат."""
+    """Конвертирует данные экзаменов в Markdown V2 для JSON с полями spec и date"""
     if not json_data:
         return "🎉 Пока экзаменов нет, наслаждайтесь свободным временем\\!"
 
-    md_lines = ["📝 \\*\\*Будущие экзамены\\*\\* 📝\n"]
+    md_lines = ["📝 *Будущие экзамены* 📝\n"]
+
     for exam in json_data:
-        discipline = escape_for_markdown_v2(exam.get('disciplineName', 'N/A'))
+        discipline = escape_for_markdown_v2(exam.get('spec', 'N/A'))
         date = escape_for_markdown_v2(exam.get('date', 'N/A'))
-        time = escape_for_markdown_v2(exam.get('time', 'N/A'))
-        classroom = escape_for_markdown_v2(exam.get('classroom', 'N/A'))
-        teacher = escape_for_markdown_v2(exam.get('teacherName', 'N/A'))
-        
-        md_lines.append(f"\\*\\*{discipline}\\*\\*")
-        md_lines.append(f"⏰ {date} \\— {time}")
-        md_lines.append(f"👨‍🏫 {teacher}")
-        md_lines.append(f"📍 {classroom}")
-        md_lines.append("")
-    
+
+        md_lines.append(f"*{discipline}*")
+        md_lines.append(f"⏰ {date}")
+        md_lines.append("")  # пустая строка между экзаменами
+
     return "\n".join(md_lines)
 
 if __name__ == "__main__":
