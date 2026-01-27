@@ -61,7 +61,7 @@ def add_account(user_id, username, token):
         conn = sqlite3.connect(DATABASE_PATH)
         cursor = conn.cursor()
         
-        # Деактивируем все остальные аккаунты
+        # Деактивируем все остальные аккаунты 
         cursor.execute("UPDATE accounts SET is_active = 0 WHERE user_id = ?", (user_id,))
 
         # Добавляем или обновляем текущий аккаунт и делаем его активным
