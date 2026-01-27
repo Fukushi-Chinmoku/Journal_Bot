@@ -165,7 +165,7 @@ def delete_all_accounts(user_id: int):
     except sqlite3.Error as e:
         logging.error("[DB] Ошибка при удалении всех аккаунтов для пользователя %d: %s", user_id, e)
 
-# --- Utility Functions ---
+#Utility Functions
 
 def escape_for_markdown_v2(text: str) -> str:
     """Экранирует специальные символы Markdown V2"""
@@ -179,7 +179,7 @@ def get_current_week_range():
     end_of_week = start_of_week + timedelta(days=6)
     return start_of_week.date(), end_of_week.date(), today.date()
 
-# --- API Interaction Functions ---
+#API Interaction Functions
 
 async def get_auth_token(username, password):
     """
