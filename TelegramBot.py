@@ -22,8 +22,9 @@ from main import (
     convert_exams_to_markdown,
     get_auth_token,
     init_db,
-    add_account,
+    add_account_with_password,
     get_active_account,
+    get_active_account_full,
     has_accounts,
     get_all_accounts,
     set_active_account,
@@ -36,7 +37,7 @@ load_dotenv()
 
 TOKEN = os.getenv("TOKEN")
 if not TOKEN:
-    raise ValueError("Токен бота не найден. Убедитесь, что он указан в файле .env")
+    raise ValueError("Токен бота не найден")
 
 bot = Bot(token=TOKEN)
 storage = MemoryStorage()
@@ -50,7 +51,7 @@ os.makedirs(MD_FOLDER, exist_ok=True)
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
-#Состояния
+# Состояния
 class Form(StatesGroup):
     username = State()
     password = State()
@@ -59,7 +60,7 @@ class AccountManagement(StatesGroup):
     choosing_account = State()
     deleting_account = State()
 
-#Клавиатуры
+# Клавиатуры
 login_markup = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text="Войти 🚀")]],
     resize_keyboard=True,
@@ -87,9 +88,8 @@ main_submenu_markup = ReplyKeyboardMarkup(
     one_time_keyboard=False
 )
 
-#Функции для автоудаления файлов
+# Функции для автоудаления файлов
 async def delete_file_later(file_path: str, delay_seconds: int = 1_209_600):
-    """Удаляет файл через delay_seconds секунд (по умолчанию 2 недели)."""
     await asyncio.sleep(delay_seconds)
     try:
         if os.path.exists(file_path):
@@ -104,7 +104,7 @@ def save_json_to_file(json_data: dict, file_path: str):
         with open(file_path, 'w', encoding='utf-8') as f:
             json.dump(json_data, f, ensure_ascii=False, indent=4)
         print(f"JSON-файл {file_path} создан.")
-        asyncio.create_task(delete_file_later(file_path))  # автоудаление через 2 недели
+        asyncio.create_task(delete_file_later(file_path))
     except Exception as e:
         print(f"Ошибка при сохранении JSON: {e}")
 
@@ -113,11 +113,11 @@ def save_md_file(markdown_text: str, file_path: str):
         with open(file_path, 'w', encoding='utf-8') as f:
             f.write(markdown_text)
         print(f"MD-файл {file_path} создан.")
-        asyncio.create_task(delete_file_later(file_path))  # автоудаление через 2 недели
+        asyncio.create_task(delete_file_later(file_path))
     except Exception as e:
         print(f"Ошибка при сохранении MD: {e}")
 
-#Хендлеры
+# Хендлеры
 @dp.message(Command("start"))
 async def send_welcome(message: types.Message):
     user_id = message.from_user.id
@@ -152,7 +152,7 @@ async def process_password(message: types.Message, state: FSMContext):
 
     try:
         token = await get_auth_token(username, password)
-        add_account(user_id, username, token)
+        add_account_with_password(user_id, username, password, token)
         await message.answer("🎉 Ваши учетные данные успешно сохранены!", parse_mode=ParseMode.HTML)
         await message.answer("Что ещё могу для вас сделать?", reply_markup=main_markup)
         await state.clear()
@@ -166,7 +166,7 @@ async def process_password(message: types.Message, state: FSMContext):
             await message.answer(f"Произошла ошибка: {error_message}", reply_markup=main_markup)
             await state.clear()
 
-#Главные меню и подменю
+# Главные меню и подменю
 @dp.message(lambda message: message.text == "Главная", StateFilter(None))
 async def show_main_submenu(message: types.Message):
     user_id = message.from_user.id
@@ -179,7 +179,27 @@ async def show_main_submenu(message: types.Message):
 async def show_main_menu_from_submenu(message: types.Message):
     await message.answer("Вы вернулись в главное меню.", reply_markup=main_markup)
 
-#Получение расписания и файлов
+# Получение расписания и файлов
+async def get_or_refresh_token(user_id: int) -> str | None:
+    """
+    Возвращает токен для активного аккаунта.
+    Если токен протух (401), попробует перелогиниться по сохраненному паролю и обновить токен в БД.
+    """
+    creds = get_active_account_full(user_id)
+    if not creds:
+        return None
+
+    username, token, password = creds
+    if token:
+        return token
+
+    if not password:
+        return None
+
+    new_token = await get_auth_token(username, password)
+    add_account_with_password(user_id, username, password, new_token)
+    return new_token
+
 async def get_user_schedule(message: types.Message, token: str):
     start_of_week, end_of_week, _ = get_current_week_range()
     user_id = message.from_user.id
@@ -195,29 +215,61 @@ async def get_user_schedule(message: types.Message, token: str):
 
         await message.answer(markdown_text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=main_markup)
     except Exception as e:
+        # Авто-перелогин при протухшем токене
+        if "Ошибка авторизации" in str(e):
+            creds = get_active_account_full(user_id)
+            if creds:
+                username, _, password = creds
+                if password:
+                    try:
+                        new_token = await get_auth_token(username, password)
+                        add_account_with_password(user_id, username, password, new_token)
+                        schedule_json_data = await schedule_get(start_of_week, end_of_week, new_token)
+
+                        json_file_path = os.path.join(JSON_FOLDER, f"schedule_{user_id}.json")
+                        save_json_to_file(schedule_json_data, json_file_path)
+
+                        markdown_text = convert_schedule_to_markdown(schedule_json_data)
+                        md_file_path = os.path.join(MD_FOLDER, f"schedule_{user_id}.md")
+                        save_md_file(markdown_text, md_file_path)
+
+                        await message.answer(markdown_text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=main_markup)
+                        return
+                    except Exception as e2:
+                        await message.answer(f"Ошибка при обновлении токена: {e2}", reply_markup=main_markup)
+                        return
+
         await message.answer(f"Ошибка при получении расписания: {e}", reply_markup=main_markup)
 
 @dp.message(lambda message: message.text == "Получить расписание 📆", StateFilter(None))
 async def get_schedule_button(message: types.Message):
     user_id = message.from_user.id
-    credentials = get_active_account(user_id)
+    credentials = get_active_account_full(user_id)
     if credentials:
-        _, token = credentials
+        _, token, _ = credentials
         await message.answer("Получаю ваше расписание...")
         await get_user_schedule(message, token)
     else:
         await message.answer("Сначала войдите в аккаунт.", reply_markup=login_markup)
 
-#Остальные хендлеры (группа, топ-3, экзамены)
+# Остальные хендлеры (группа, топ-3, экзамены)
 @dp.message(lambda message: message.text == "Студенты группы 👥", StateFilter(None))
 async def get_group_leaders_button(message: types.Message):
     user_id = message.from_user.id
-    credentials = get_active_account(user_id)
+    credentials = get_active_account_full(user_id)
     if credentials:
-        _, token = credentials
+        username, token, password = credentials
         await message.answer("Получаю список студентов группы...")
         try:
-            json_data = await get_leader_group(token)
+            try:
+                json_data = await get_leader_group(token)
+            except Exception as e:
+                if "Ошибка авторизации" in str(e) and password:
+                    new_token = await get_auth_token(username, password)
+                    add_account_with_password(user_id, username, password, new_token)
+                    json_data = await get_leader_group(new_token)
+                else:
+                    raise
             markdown_text = create_leader_group_markdown(json_data)
 
             json_file_path = os.path.join(JSON_FOLDER, f"group_leaders_{user_id}.json")
@@ -232,12 +284,20 @@ async def get_group_leaders_button(message: types.Message):
 @dp.message(lambda message: message.text == "Топ 3 в потоке 🏆", StateFilter(None))
 async def get_stream_leaders_button(message: types.Message):
     user_id = message.from_user.id
-    credentials = get_active_account(user_id)
+    credentials = get_active_account_full(user_id)
     if credentials:
-        _, token = credentials
+        username, token, password = credentials
         await message.answer("Получаю топ-3 студентов потока...")
         try:
-            json_data = await get_leader_stream(token)
+            try:
+                json_data = await get_leader_stream(token)
+            except Exception as e:
+                if "Ошибка авторизации" in str(e) and password:
+                    new_token = await get_auth_token(username, password)
+                    add_account_with_password(user_id, username, password, new_token)
+                    json_data = await get_leader_stream(new_token)
+                else:
+                    raise
             markdown_text = convert_leader_stream_to_markdown(json_data)
 
             json_file_path = os.path.join(JSON_FOLDER, f"stream_leaders_{user_id}.json")
@@ -252,12 +312,20 @@ async def get_stream_leaders_button(message: types.Message):
 @dp.message(lambda message: message.text == "Будущие экзамены 📚", StateFilter(None))
 async def get_exams_button(message: types.Message):
     user_id = message.from_user.id
-    credentials = get_active_account(user_id)
+    credentials = get_active_account_full(user_id)
     if credentials:
-        _, token = credentials
+        username, token, password = credentials
         await message.answer("Получаю список будущих экзаменов...")
         try:
-            json_data = await get_future_exams(token)
+            try:
+                json_data = await get_future_exams(token)
+            except Exception as e:
+                if "Ошибка авторизации" in str(e) and password:
+                    new_token = await get_auth_token(username, password)
+                    add_account_with_password(user_id, username, password, new_token)
+                    json_data = await get_future_exams(new_token)
+                else:
+                    raise
             markdown_text = convert_exams_to_markdown(json_data)
 
             json_file_path = os.path.join(JSON_FOLDER, f"exams_{user_id}.json")
@@ -269,7 +337,7 @@ async def get_exams_button(message: types.Message):
         except Exception as e:
             await message.answer(f"Ошибка при получении экзаменов: {e}", reply_markup=main_submenu_markup)
 
-#Управление аккаунтами
+# Управление аккаунтами
 @dp.message(lambda message: message.text == "Управление аккаунтами ⚙️", StateFilter(None))
 async def manage_accounts(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
@@ -345,14 +413,13 @@ async def process_delete_account(message: types.Message, state: FSMContext):
 
     await state.clear()
 
-#Выход
+# Выход
 @dp.message(lambda message: message.text == "Выйти 🚪", StateFilter(None))
 async def logout_button(message: types.Message):
     user_id = message.from_user.id
     delete_all_accounts(user_id)
     await message.answer("Вы вышли из всех аккаунтов.", reply_markup=login_markup)
 
-#Запуск бота
 async def main():
     init_db()
     await dp.start_polling(bot)
