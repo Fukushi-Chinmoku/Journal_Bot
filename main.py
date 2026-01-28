@@ -5,17 +5,18 @@ from datetime import datetime, timedelta
 from collections import defaultdict
 import os
 import re
-import sqlite3
 import logging
-from pathlib import Path
+from pymongo import MongoClient
+from pymongo.errors import PyMongoError, DuplicateKeyError
+from cryptography.fernet import Fernet, InvalidToken
 
-#API
-LOGIN_URL = ""
-SCHEDULE_API_URL = ""
-LEADER_STREAM_URL = ""
-LEADER_GROUP_URL = ""
-FUTURE_EXAMS_URL = ""
-APPLICATION_KEY = ""
+# API
+LOGIN_URL = "https://msapi.top-academy.ru/api/v2/auth/login"
+SCHEDULE_API_URL = "https://msapi.top-academy.ru/api/v2/schedule/operations/get-by-date-range"
+LEADER_STREAM_URL = "https://msapi.top-academy.ru/api/v2/dashboard/progress/leader-stream"
+LEADER_GROUP_URL = "https://msapi.top-academy.ru/api/v2/dashboard/progress/leader-group"
+FUTURE_EXAMS_URL = "https://msapi.top-academy.ru/api/v2/dashboard/info/future-exams"
+APPLICATION_KEY = "6a56a5df2667e65aab73ce76d1dd737f7d1faef9c52e8b8c55ac75f565d8e8a6"
 
 HEADERS = {
     "User-Agent": "Mozilla/5.5 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
@@ -24,168 +25,216 @@ HEADERS = {
     "Origin": "https://journal.top-academy.ru"
 }
 
-#Database
-current_file_path = Path(__file__).resolve()
-database_folder = current_file_path.parent
-DATABASE_FILE = 'user_credentials.db'
-DATABASE_PATH = database_folder / DATABASE_FILE
+MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
+MONGODB_DB = os.getenv("MONGODB_DB", "journalbot")
+MONGODB_COLLECTION = os.getenv("MONGODB_COLLECTION", "accounts")
+PASSWORD_ENC_KEY = os.getenv("PASSWORD_ENC_KEY")
+
+mongo_client: MongoClient | None = None
+accounts_col = None
 
 logging.basicConfig(level=logging.INFO)
 
-def init_db():
-    """Инициализирует базу данных и создает таблицу 'accounts', если она не существует"""
+def generate_password_enc_key() -> str:
+    return Fernet.generate_key().decode("utf-8")
+
+def _get_fernet() -> Fernet | None:
+    if not PASSWORD_ENC_KEY:
+        return None
     try:
-        conn = sqlite3.connect(DATABASE_PATH)
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS accounts (
-                user_id INTEGER NOT NULL,
-                username TEXT NOT NULL,
-                token TEXT NOT NULL,
-                is_active INTEGER NOT NULL,
-                PRIMARY KEY (user_id, username)
-            )
-        """)
-        conn.commit()
-        conn.close()
-        logging.info("[DB] База данных %s инициализирована", DATABASE_PATH)
-    except sqlite3.Error as e:
-        logging.error("[DB] Ошибка при инициализации базы данных: %s", e)
+        return Fernet(PASSWORD_ENC_KEY.encode("utf-8"))
+    except Exception:
+        logging.error("Некорректный PASSWORD_ENC_KEY. Сгенерируйте новый ключ")
+        return None
+
+def encrypt_password(password: str) -> str:
+    f = _get_fernet()
+    if not f:
+        raise RuntimeError("PASSWORD_ENC_KEY не задан. Нельзя шифровать пароль")
+    return f.encrypt(password.encode("utf-8")).decode("utf-8")
+
+def decrypt_password(token_str: str) -> str:
+    f = _get_fernet()
+    if not f:
+        raise RuntimeError("PASSWORD_ENC_KEY не задан. Нельзя расшифровать пароль")
+    try:
+        return f.decrypt(token_str.encode("utf-8")).decode("utf-8")
+    except InvalidToken:
+        raise RuntimeError("Не удалось расшифровать пароль. Неверный ключ или поврежденные данные")
+
+def init_db():
+    # Инициализация MongoDB, коллекция и индексы
+    global mongo_client, accounts_col
+    try:
+        # Таймер на подключение к MongoDB
+        mongo_client = MongoClient(MONGODB_URI, serverSelectionTimeoutMS=3000)
+        db = mongo_client[MONGODB_DB]
+        accounts_col = db[MONGODB_COLLECTION]
+        # ping для проверки соединения
+        mongo_client.admin.command("ping")
+        # уникальность пары (user_id, username)
+        accounts_col.create_index([("user_id", 1), ("username", 1)], unique=True)
+        logging.info("MongoDB инициализирована (%s / %s)", MONGODB_DB, MONGODB_COLLECTION)
+    except PyMongoError as e:
+        logging.error("Ошибка при инициализации MongoDB: %s", e)
+        raise
 
 def add_account(user_id, username, token):
-    """
-    Добавляет новый аккаунт в базу данных. Сохраняет токен вместо пароля
-    Деактивирует все остальные аккаунты для этого пользователя
-    """
+    # Добавляет/обновляет аккаунт и делает его активным. Пароль не сохраняется
+    if accounts_col is None:
+        init_db()
     try:
-        conn = sqlite3.connect(DATABASE_PATH)
-        cursor = conn.cursor()
-        
-        # Деактивируем все остальные аккаунты 
-        cursor.execute("UPDATE accounts SET is_active = 0 WHERE user_id = ?", (user_id,))
+        accounts_col.update_many({"user_id": user_id}, {"$set": {"is_active": False}})
+        accounts_col.update_one(
+            {"user_id": user_id, "username": username},
+            {"$set": {"token": token, "is_active": True}, "$unset": {"password": "", "password_enc": ""}},
+            upsert=True,
+        )
+        logging.info("Аккаунт %s для пользователя %d сохранен (без пароля)", username, user_id)
+    except PyMongoError as e:
+        logging.error("Ошибка при добавлении аккаунта для пользователя %d: %s", user_id, e)
 
-        # Добавляем или обновляем текущий аккаунт и делаем его активным
-        cursor.execute("INSERT OR REPLACE INTO accounts (user_id, username, token, is_active) VALUES (?, ?, ?, ?)", (user_id, username, token, 1))
-
-        conn.commit()
-        conn.close()
-        logging.info("[DB] Аккаунт %s для пользователя %d сохранен.", username, user_id)
-    except sqlite3.Error as e:
-        logging.error("[DB] Ошибка при добавлении аккаунта для пользователя %d: %s", user_id, e)
+def add_account_with_password(user_id: int, username: str, password: str, token: str):
+    # бновляем аккаунт, сохраняя токен и пароль (для автологина при 401 ведь колледж не выдаст нормальный апи)
+    if accounts_col is None:
+        init_db()
+    try:
+        password_enc = encrypt_password(password)
+        accounts_col.update_many({"user_id": user_id}, {"$set": {"is_active": False}})
+        accounts_col.update_one(
+            {"user_id": user_id, "username": username},
+            {"$set": {"token": token, "password_enc": password_enc, "is_active": True}, "$unset": {"password": ""}},
+            upsert=True,
+        )
+        logging.info("Аккаунт %s для пользователя %d сохранен (с шифрованным паролем).", username, user_id)
+    except DuplicateKeyError:
+        logging.warning("Дубликат аккаунта %s для пользователя %d", username, user_id)
+    except RuntimeError as e:
+        logging.error("%s", e)
+        raise
+    except PyMongoError as e:
+        logging.error("Ошибка при добавлении аккаунта (с паролем) для пользователя %d: %s", user_id, e)
 
 def get_active_account(user_id):
-    """
-    Получает активный аккаунт и его токен для указанного пользователя
-    """
+    # Получаем активный аккаунт и его токен для указанного пользователя
+    if accounts_col is None:
+        init_db()
     try:
-        conn = sqlite3.connect(DATABASE_PATH)
-        cursor = conn.cursor()
-        # Теперь возвращаем токен вместо пароля
-        cursor.execute("SELECT username, token FROM accounts WHERE user_id = ? AND is_active = 1", (user_id,))
-        credentials = cursor.fetchone()
-        conn.close()
-        if credentials:
-            logging.info("[DB] Активный аккаунт для пользователя %d получен из БД", user_id)
-        return credentials
-    except sqlite3.Error as e:
-        logging.error("[DB] Ошибка при получении активного аккаунта для пользователя %d: %s", user_id, e)
+        doc = accounts_col.find_one({"user_id": user_id, "is_active": True}, {"username": 1, "token": 1, "_id": 0})
+        if doc:
+            logging.info("Активный аккаунт для пользователя %d получен из БД", user_id)
+            return (doc.get("username"), doc.get("token"))
+        return None
+    except PyMongoError as e:
+        logging.error("Ошибка при получении активного аккаунта для пользователя %d: %s", user_id, e)
+        return None
+
+def get_active_account_full(user_id: int):
+    # Получаем активный аккаунт (username, token, password)
+    if accounts_col is None:
+        init_db()
+    try:
+        doc = accounts_col.find_one(
+            {"user_id": user_id, "is_active": True},
+            {"username": 1, "token": 1, "password_enc": 1, "password": 1, "_id": 0},
+        )
+        if doc:
+            logging.info("Активный аккаунт для пользователя %d получен из БД", user_id)
+            username = doc.get("username")
+            token = doc.get("token")
+
+            # если старый plaintext password есть шифруем
+            if doc.get("password") and not doc.get("password_enc"):
+                if _get_fernet():
+                    enc = encrypt_password(doc["password"])
+                    accounts_col.update_one(
+                        {"user_id": user_id, "username": username},
+                        {"$set": {"password_enc": enc}, "$unset": {"password": ""}},
+                    )
+                    doc["password_enc"] = enc
+
+            password = None
+            if doc.get("password_enc"):
+                password = decrypt_password(doc["password_enc"])
+            return (username, token, password)
+        return None
+    except PyMongoError as e:
+        logging.error("Ошибка при получении активного аккаунта для пользователя %d: %s", user_id, e)
         return None
 
 def get_all_accounts(user_id):
-    """
-    Получает все аккаунты для указанного пользователя
-    """
+    # Получаем все аккаунты для указанного пользователя
+    if accounts_col is None:
+        init_db()
     try:
-        conn = sqlite3.connect(DATABASE_PATH)
-        cursor = conn.cursor()
-        cursor.execute("SELECT username, is_active FROM accounts WHERE user_id = ?", (user_id,))
-        accounts = cursor.fetchall()
-        conn.close()
-        logging.info("[DB] Список аккаунтов для пользователя %d получен", user_id)
+        cursor = accounts_col.find({"user_id": user_id}, {"username": 1, "is_active": 1, "_id": 0})
+        accounts = [(doc.get("username"), bool(doc.get("is_active"))) for doc in cursor]
+        logging.info("Список аккаунтов для пользователя %d получен", user_id)
         return accounts
-    except sqlite3.Error as e:
-        logging.error("[DB] Ошибка при получении всех аккаунтов для пользователя %d: %s", user_id, e)
+    except PyMongoError as e:
+        logging.error("[Ошибка при получении всех аккаунтов для пользователя %d: %s", user_id, e)
         return []
 
 def set_active_account(user_id, username):
-    """
-    Устанавливает указанный аккаунт как активный для пользователя
-    """
+    # Устанавливаем указанный аккаунт как активный для пользователя
+    if accounts_col is None:
+        init_db()
     try:
-        conn = sqlite3.connect(DATABASE_PATH)
-        cursor = conn.cursor()
-        cursor.execute("UPDATE accounts SET is_active = 0 WHERE user_id = ?", (user_id,))
-        cursor.execute("UPDATE accounts SET is_active = 1 WHERE user_id = ? AND username = ?", (user_id, username))
-        conn.commit()
-        conn.close()
-        logging.info("[DB] Активным аккаунтом для пользователя %d установлен %s", user_id, username)
-    except sqlite3.Error as e:
-        logging.error("[DB] Ошибка при смене активного аккаунта для пользователя %d: %s", user_id, e)
+        accounts_col.update_many({"user_id": user_id}, {"$set": {"is_active": False}})
+        accounts_col.update_one({"user_id": user_id, "username": username}, {"$set": {"is_active": True}})
+        logging.info("Активным аккаунтом для пользователя %d установлен %s", user_id, username)
+    except PyMongoError as e:
+        logging.error("Ошибка при смене активного аккаунта для пользователя %d: %s", user_id, e)
 
 def delete_account(user_id, username):
-    """
-    Удаляет аккаунт из базы данных
-    """
+    # Удаляет аккаунт из базы данных
+    if accounts_col is None:
+        init_db()
     try:
-        conn = sqlite3.connect(DATABASE_PATH)
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM accounts WHERE user_id = ? AND username = ?", (user_id, username))
-        conn.commit()
-        conn.close()
-        logging.info("[DB] Аккаунт %s для пользователя %d удален", username, user_id)
-    except sqlite3.Error as e:
-        logging.error("[DB] Ошибка при удалении аккаунта %s для пользователя %d: %s", username, user_id, e)
+        accounts_col.delete_one({"user_id": user_id, "username": username})
+        logging.info("Аккаунт %s для пользователя %d удален", username, user_id)
+    except PyMongoError as e:
+        logging.error("Ошибка при удалении аккаунта %s для пользователя %d: %s", username, user_id, e)
 
 def has_accounts(user_id):
-    """
-    Проверяет, есть ли у пользователя какие-либо аккаунты
-    """
+    # Проверяет, есть ли у пользователя какие-либо аккаунты
+    if accounts_col is None:
+        init_db()
     try:
-        conn = sqlite3.connect(DATABASE_PATH)
-        cursor = conn.cursor()
-        cursor.execute("SELECT COUNT(*) FROM accounts WHERE user_id = ?", (user_id,))
-        count = cursor.fetchone()[0]
-        conn.close()
+        count = accounts_col.count_documents({"user_id": user_id})
         return count > 0
-    except sqlite3.Error as e:
-        logging.error("[DB] Ошибка при проверке наличия аккаунтов для пользователя %d: %s", user_id, e)
+    except PyMongoError as e:
+        logging.error("Ошибка при проверке наличия аккаунтов для пользователя %d: %s", user_id, e)
         return False
 
 def delete_all_accounts(user_id: int):
-    """
-    Удаляет все аккаунты для указанного пользователя
-    """
+   # Удаляет все аккаунты для указанного пользователя
+    if accounts_col is None:
+        init_db()
     try:
-        conn = sqlite3.connect(DATABASE_PATH)
-        cursor = conn.cursor()
-        cursor.execute("DELETE FROM accounts WHERE user_id = ?", (user_id,))
-        conn.commit()
-        conn.close()
-        logging.info("[DB] Все аккаунты для пользователя %d удалены", user_id)
-    except sqlite3.Error as e:
-        logging.error("[DB] Ошибка при удалении всех аккаунтов для пользователя %d: %s", user_id, e)
+        accounts_col.delete_many({"user_id": user_id})
+        logging.info("Все аккаунты для пользователя %d удалены", user_id)
+    except PyMongoError as e:
+        logging.error("Ошибка при удалении всех аккаунтов для пользователя %d: %s", user_id, e)
 
-#Utility Functions
+
 
 def escape_for_markdown_v2(text: str) -> str:
-    """Экранирует специальные символы Markdown V2"""
+    # Экранирует специальные символы Markdown V2
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return re.sub(f'([{re.escape(escape_chars)}])', r'\\\1', text)
 
 def get_current_week_range():
-    """Возвращает диапазон дат для текущей недели"""
+    # Возвращает диапазон дат для текущей недели
     today = datetime.today()
     start_of_week = today - timedelta(days=today.weekday())
     end_of_week = start_of_week + timedelta(days=6)
     return start_of_week.date(), end_of_week.date(), today.date()
 
-#API Interaction Functions
+# ипользование API
 
 async def get_auth_token(username, password):
-    """
-    Получает токен авторизации, используя имя пользователя и пароль
-    Возвращает токен, если успешно, иначе вызывает исключение
-    """
+    # Получаем токен авторизации, используя имя пользователя и пароль. Возвращаем токен
     try:
         async with httpx.AsyncClient(follow_redirects=True) as client:
             login_payload = {
@@ -199,7 +248,7 @@ async def get_auth_token(username, password):
                 headers=HEADERS,
                 json=login_payload
             )
-            login_resp.raise_for_status() # Вызывает исключение при ошибках HTTP (4xx/5xx)
+            login_resp.raise_for_status() # Вызываем исключение при ошибках HTTP
             
             login_json = login_resp.json()
             token = login_json.get("access_token") or login_json.get("token")
@@ -215,7 +264,7 @@ async def get_auth_token(username, password):
         raise Exception(f"Ошибка получения токена: {e}")
 
 async def schedule_get(start_date, end_date, token):
-    """Получает расписание по токену"""
+    # Получает расписание по токену
     try:
         auth_headers = HEADERS.copy()
         auth_headers["Authorization"] = f"Bearer {token}"
@@ -240,7 +289,7 @@ async def schedule_get(start_date, end_date, token):
         raise
 
 async def get_leader_stream(token):
-    """Получает топ-3 студентов потока по токену"""
+    # Получаем топ-3 студентов потока по токену
     try:
         auth_headers = HEADERS.copy()
         auth_headers["Authorization"] = f"Bearer {token}"
@@ -258,7 +307,7 @@ async def get_leader_stream(token):
         raise Exception(f"Непредвиденная ошибка при получении лидеров потока: {e}")
 
 async def get_leader_group(token):
-    """Получает список студентов группы по токену"""
+   # Получаем список студентов группы по токену
     try:
         auth_headers = HEADERS.copy()
         auth_headers["Authorization"] = f"Bearer {token}"
@@ -276,7 +325,7 @@ async def get_leader_group(token):
         raise Exception(f"Непредвиденная ошибка при получении студентов группы: {e}")
 
 async def get_future_exams(token):
-    """Получает список будущих экзаменов по токену"""
+    # Получаем список будущих экзаменов по токену
     try:
         auth_headers = HEADERS.copy()
         auth_headers["Authorization"] = f"Bearer {token}"
@@ -293,10 +342,10 @@ async def get_future_exams(token):
     except Exception as e:
         raise Exception(f"Непредвиденная ошибка при получении списка экзаменов: {e}")
 
-# --- Formatting Functions ---
+# Форматирование данных
 
 def save_json_to_file(json_data: dict, file_path: str):
-    """Сохраняет JSON-данные в файл."""
+    # Сохраняем JSON данные в файл
     try:
         with open(file_path, 'w', encoding='utf-8') as f:
             json.dump(json_data, f, ensure_ascii=False, indent=4)
@@ -306,7 +355,7 @@ def save_json_to_file(json_data: dict, file_path: str):
         raise
 
 def convert_schedule_to_markdown(schedule: list) -> str:
-    """Конвертирует данные расписания в Markdown-формат"""
+    # Конвертируем данные расписания в Markdown
     try:
         today = datetime.today().date()
         start_of_week = today - timedelta(days=today.weekday())
@@ -366,14 +415,14 @@ def convert_schedule_to_markdown(schedule: list) -> str:
         raise
 
 def get_student_name(student_data: dict) -> str:
-    """Возвращает имя студента, экранируя его."""
+    # Возвращаем имя студента
     name = student_data.get('student_name') or student_data.get('full_name') or student_data.get('name')
     if name:
         return escape_for_markdown_v2(name)
     return "Неизвестный"
 
 def convert_leader_stream_to_markdown(json_data: list) -> str:
-    """Конвертирует данные лидеров потока в Markdown-формат"""
+    # Конвертируем данные лидеров потока в Markdown
     if not json_data:
         return "Список лидеров потока пуст\\"
 
@@ -387,7 +436,7 @@ def convert_leader_stream_to_markdown(json_data: list) -> str:
     return "\n".join(md_lines)
 
 def create_leader_group_markdown(json_data: list) -> str:
-    """Конвертирует данные студентов группы в Markdown-формат"""
+    # Конвертируем данные студентов группы в Markdown
     if not json_data:
         return "Список студентов группы пуст\\"
 
@@ -402,7 +451,7 @@ def create_leader_group_markdown(json_data: list) -> str:
     return "\n".join(md_lines)
 
 def convert_exams_to_markdown(json_data: list) -> str:
-    """Конвертирует данные экзаменов в Markdown V2 для JSON с полями spec и date"""
+    # Конвертируем данные экзаменов в Markdown V2
     if not json_data:
         return "🎉 Пока экзаменов нет, наслаждайтесь свободным временем\\!"
 
