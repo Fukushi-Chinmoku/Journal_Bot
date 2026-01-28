@@ -50,7 +50,7 @@ os.makedirs(MD_FOLDER, exist_ok=True)
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 
-# --- Состояния ---
+#Состояния
 class Form(StatesGroup):
     username = State()
     password = State()
@@ -59,7 +59,7 @@ class AccountManagement(StatesGroup):
     choosing_account = State()
     deleting_account = State()
 
-# --- Клавиатуры ---
+#Клавиатуры
 login_markup = ReplyKeyboardMarkup(
     keyboard=[[KeyboardButton(text="Войти 🚀")]],
     resize_keyboard=True,
@@ -87,7 +87,7 @@ main_submenu_markup = ReplyKeyboardMarkup(
     one_time_keyboard=False
 )
 
-# --- Функции для автоудаления файлов ---
+#Функции для автоудаления файлов
 async def delete_file_later(file_path: str, delay_seconds: int = 1_209_600):
     """Удаляет файл через delay_seconds секунд (по умолчанию 2 недели)."""
     await asyncio.sleep(delay_seconds)
@@ -117,7 +117,7 @@ def save_md_file(markdown_text: str, file_path: str):
     except Exception as e:
         print(f"Ошибка при сохранении MD: {e}")
 
-# --- Хендлеры ---
+#Хендлеры
 @dp.message(Command("start"))
 async def send_welcome(message: types.Message):
     user_id = message.from_user.id
@@ -166,7 +166,7 @@ async def process_password(message: types.Message, state: FSMContext):
             await message.answer(f"Произошла ошибка: {error_message}", reply_markup=main_markup)
             await state.clear()
 
-# --- Главные меню и подменю ---
+#Главные меню и подменю
 @dp.message(lambda message: message.text == "Главная", StateFilter(None))
 async def show_main_submenu(message: types.Message):
     user_id = message.from_user.id
@@ -179,7 +179,7 @@ async def show_main_submenu(message: types.Message):
 async def show_main_menu_from_submenu(message: types.Message):
     await message.answer("Вы вернулись в главное меню.", reply_markup=main_markup)
 
-# --- Получение расписания и файлов ---
+#Получение расписания и файлов
 async def get_user_schedule(message: types.Message, token: str):
     start_of_week, end_of_week, _ = get_current_week_range()
     user_id = message.from_user.id
@@ -208,7 +208,7 @@ async def get_schedule_button(message: types.Message):
     else:
         await message.answer("Сначала войдите в аккаунт.", reply_markup=login_markup)
 
-# --- Остальные хендлеры (группа, топ-3, экзамены) ---
+#Остальные хендлеры (группа, топ-3, экзамены)
 @dp.message(lambda message: message.text == "Студенты группы 👥", StateFilter(None))
 async def get_group_leaders_button(message: types.Message):
     user_id = message.from_user.id
@@ -269,7 +269,7 @@ async def get_exams_button(message: types.Message):
         except Exception as e:
             await message.answer(f"Ошибка при получении экзаменов: {e}", reply_markup=main_submenu_markup)
 
-# --- Управление аккаунтами ---
+#Управление аккаунтами
 @dp.message(lambda message: message.text == "Управление аккаунтами ⚙️", StateFilter(None))
 async def manage_accounts(message: types.Message, state: FSMContext):
     user_id = message.from_user.id
@@ -345,14 +345,14 @@ async def process_delete_account(message: types.Message, state: FSMContext):
 
     await state.clear()
 
-# --- Выход ---
+#Выход
 @dp.message(lambda message: message.text == "Выйти 🚪", StateFilter(None))
 async def logout_button(message: types.Message):
     user_id = message.from_user.id
     delete_all_accounts(user_id)
     await message.answer("Вы вышли из всех аккаунтов.", reply_markup=login_markup)
 
-# --- Запуск бота ---
+#Запуск бота
 async def main():
     init_db()
     await dp.start_polling(bot)
