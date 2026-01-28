@@ -48,6 +48,7 @@ os.makedirs(JSON_FOLDER, exist_ok=True)
 os.makedirs(MD_FOLDER, exist_ok=True)
 
 from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.context import FSMContext
 
 # --- Состояния ---
 class Form(StatesGroup):
@@ -130,18 +131,18 @@ async def send_welcome(message: types.Message):
         )
 
 @dp.message(lambda message: message.text == "Войти 🚀")
-async def process_login_button(message: types.Message, state: MemoryStorage):
+async def process_login_button(message: types.Message, state: FSMContext):
     await message.answer("Пожалуйста, введите ваш <b>логин</b> от журнала:", parse_mode=ParseMode.HTML)
     await state.set_state(Form.username)
 
 @dp.message(Form.username)
-async def process_username(message: types.Message, state: MemoryStorage):
+async def process_username(message: types.Message, state: FSMContext):
     await state.update_data(username=message.text)
     await message.answer("Отлично! Теперь введите ваш <b>пароль</b>:", parse_mode=ParseMode.HTML)
     await state.set_state(Form.password)
 
 @dp.message(Form.password)
-async def process_password(message: types.Message, state: MemoryStorage):
+async def process_password(message: types.Message, state: FSMContext):
     user_data = await state.get_data()
     username = user_data['username']
     password = message.text
@@ -267,6 +268,82 @@ async def get_exams_button(message: types.Message):
             await message.answer(markdown_text, parse_mode=ParseMode.MARKDOWN_V2, reply_markup=main_submenu_markup)
         except Exception as e:
             await message.answer(f"Ошибка при получении экзаменов: {e}", reply_markup=main_submenu_markup)
+
+# --- Управление аккаунтами ---
+@dp.message(lambda message: message.text == "Управление аккаунтами ⚙️", StateFilter(None))
+async def manage_accounts(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    accounts = get_all_accounts(user_id)
+    if not accounts:
+        await message.answer("У вас нет сохраненных аккаунтов. Пожалуйста, войдите, чтобы добавить аккаунт.", reply_markup=login_markup)
+        return
+    
+    keyboard_buttons = []
+    for username, is_active in accounts:
+        text = f"✅ {username}" if is_active else username
+        keyboard_buttons.append([KeyboardButton(text=text)])
+    
+    keyboard_buttons.append([KeyboardButton(text="Добавить новый аккаунт ➕")])
+    keyboard_buttons.append([KeyboardButton(text="Удалить аккаунт 🗑️")])
+    keyboard_buttons.append([KeyboardButton(text="Назад")])
+
+    markup = ReplyKeyboardMarkup(keyboard=keyboard_buttons, resize_keyboard=True, one_time_keyboard=True)
+
+    await message.answer("Выберите аккаунт, чтобы сделать его активным, или выполните другое действие:", reply_markup=markup)
+    await state.set_state(AccountManagement.choosing_account)
+
+@dp.message(AccountManagement.choosing_account)
+async def process_account_choice(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    text = message.text
+
+    if text == "Добавить новый аккаунт ➕":
+        await message.answer("Хорошо, давайте добавим новый аккаунт. Пожалуйста, введите ваш <b>логин</b>:", parse_mode=ParseMode.HTML)
+        await state.set_state(Form.username)
+    elif text == "Удалить аккаунт 🗑️":
+        accounts = get_all_accounts(user_id)
+        if not accounts:
+            await message.answer("У вас нет аккаунтов для удаления.", reply_markup=main_markup)
+            await state.clear()
+            return
+        
+        keyboard_buttons = []
+        for username, _ in accounts:
+            keyboard_buttons.append([KeyboardButton(text=username)])
+        keyboard_buttons.append([KeyboardButton(text="Отмена")])
+        
+        markup = ReplyKeyboardMarkup(keyboard=keyboard_buttons, resize_keyboard=True, one_time_keyboard=True)
+        
+        await message.answer("Выберите аккаунт для удаления:", reply_markup=markup)
+        await state.set_state(AccountManagement.deleting_account)
+    elif text == "Назад":
+        await message.answer("Вы вернулись в главное меню.", reply_markup=main_markup)
+        await state.clear()
+    else:
+        # Убираем маркер активного аккаунта при обработке выбора
+        username = re.sub(r"✅ (.*)", r"\1", text)
+        set_active_account(user_id, username)
+        await message.answer(f"Аккаунт <b>{username}</b> теперь активен!", parse_mode=ParseMode.HTML, reply_markup=main_markup)
+        await state.clear()
+
+@dp.message(AccountManagement.deleting_account)
+async def process_delete_account(message: types.Message, state: FSMContext):
+    user_id = message.from_user.id
+    username_to_delete = message.text
+    
+    if username_to_delete == "Отмена":
+        await message.answer("Удаление аккаунта отменено.", reply_markup=main_markup)
+    else:
+        delete_account(user_id, username_to_delete)
+        active_account = get_active_account(user_id)
+        if not active_account and has_accounts(user_id):
+            accounts = get_all_accounts(user_id)
+            if accounts:
+                set_active_account(user_id, accounts[0][0])
+
+        await message.answer(f"Аккаунт <b>{username_to_delete}</b> удален.", parse_mode=ParseMode.HTML, reply_markup=main_markup)
+
+    await state.clear()
 
 # --- Выход ---
 @dp.message(lambda message: message.text == "Выйти 🚪", StateFilter(None))
