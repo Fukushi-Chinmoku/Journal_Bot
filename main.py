@@ -10,12 +10,12 @@ import logging
 from pathlib import Path
 
 #API
-LOGIN_URL = "https://msapi.top-academy.ru/api/v2/auth/login"
-SCHEDULE_API_URL = "https://msapi.top-academy.ru/api/v2/schedule/operations/get-by-date-range"
-LEADER_STREAM_URL = "https://msapi.top-academy.ru/api/v2/dashboard/progress/leader-stream"
-LEADER_GROUP_URL = "https://msapi.top-academy.ru/api/v2/dashboard/progress/leader-group"
-FUTURE_EXAMS_URL = "https://msapi.top-academy.ru/api/v2/dashboard/info/future-exams"
-APPLICATION_KEY = "6a56a5df2667e65aab73ce76d1dd737f7d1faef9c52e8b8c55ac75f565d8e8a6"
+LOGIN_URL = ""
+SCHEDULE_API_URL = ""
+LEADER_STREAM_URL = ""
+LEADER_GROUP_URL = ""
+FUTURE_EXAMS_URL = ""
+APPLICATION_KEY = ""
 
 HEADERS = {
     "User-Agent": "Mozilla/5.5 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36",
