@@ -9,6 +9,7 @@ import logging
 from pymongo import MongoClient
 from pymongo.errors import PyMongoError, DuplicateKeyError
 from cryptography.fernet import Fernet, InvalidToken
+import pymongo
 
 # API
 LOGIN_URL = "https://msapi.top-academy.ru/api/v2/auth/login"
@@ -25,10 +26,12 @@ HEADERS = {
     "Origin": "https://journal.top-academy.ru"
 }
 
-MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
+MONGODB_URI = os.getenv("MONGODB_URI", "mongodb://mongo:27017/botdb")
 MONGODB_DB = os.getenv("MONGODB_DB", "journalbot")
 MONGODB_COLLECTION = os.getenv("MONGODB_COLLECTION", "accounts")
 PASSWORD_ENC_KEY = os.getenv("PASSWORD_ENC_KEY")
+
+
 
 mongo_client: MongoClient | None = None
 accounts_col = None
